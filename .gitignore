@@ -1,0 +1,8 @@
+build/
+install/
+log/
+
+*.db3
+rosbag*
+mavros/
+nova/meshes/
