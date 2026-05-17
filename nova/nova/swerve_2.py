@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from sensor_msgs.msg import Imu
 from nav_msgs.msg import Odometry
 import numpy as np
 import math
@@ -52,7 +53,6 @@ class SwerveController(Node):
         self.serial_buffer_bytes = b""
 
         try:
-            # ---- Serial ----
             self.ser = serial.Serial(
                 port='/dev/ttyUSB0',
                 baudrate=115200,
@@ -63,12 +63,12 @@ class SwerveController(Node):
         except:
             print("Failed to open serial port")
 
-        self.sub_1 = self.create_subscription(
-            Twist,
-            'cmd_vel_1',
-            self.cmd_vel_callback_1,
-            10
-        )
+        # self.sub_1 = self.create_subscription(
+        #     Twist,
+        #     'cmd_vel_1',
+        #     self.cmd_vel_callback_1,
+        #     10
+        # )
 
         self.sub = self.create_subscription(
             Twist,
@@ -81,31 +81,56 @@ class SwerveController(Node):
 
         self.create_timer(0.02, self.update_serial)
 
+        self.sub_imu = self.create_subscription(
+            Imu,
+            'imu/data',
+            self.imu_callback,
+            10
+        )
+
+        self.imu_omega = 0
+
+        self.prev_error = 0
+        self.i = 0
+
+        self.Kp = 0.4
+        self.Ki = 0.005
+        self.Kd = 0.03
+
+        self.pid_last_time = time.time()
+
     def update_serial(self):
         self.mode = self.read_feedback()
 
-        if self.odom_recv:
-            self.publish_odom()
+        # if self.odom_recv:
+        self.publish_odom()
 
-    def cmd_vel_callback_1(self, msg):
-        if self.mode == 2:
-            now = time.time()
+    # def cmd_vel_callback_1(self, msg):
+    #     if self.mode == 2:
+    #         now = time.time()
 
-            if now - self.last_serial_time < self.serial_period:
-                return
+    #         if now - self.last_serial_time < self.serial_period:
+    #             return
             
-            self.last_serial_time = now
+    #         self.last_serial_time = now
             
-            vx = msg.linear.x     # m/s
-            vy = msg.linear.y     # m/s
-            omega = msg.angular.z # rad/s
+    #         vx = msg.linear.x     # m/s
+    #         vy = msg.linear.y     # m/s
+    #         omega = msg.angular.z # rad/s
 
-            wheel_states = self.compute_swerve(vx, vy, omega)
+    #         now = time.time()
+    #         dt = now - self.pid_last_time
+    #         self.pid_last_time = now
+
+    #         omega = self.compensate_omega(omega, self.imu_omega, dt)
+
+    #         wheel_states = self.compute_swerve(vx, vy, omega)
             
-            self.send_serial(wheel_states)
+    #         self.send_serial(wheel_states)
 
     def cmd_vel_callback(self, msg):
-        if self.mode == 3 or self.mode == 4:
+        # if self.mode == 3 or self.mode == 4:
+        if True:
             now = time.time()
 
             if now - self.last_serial_time < self.serial_period:
@@ -117,9 +142,35 @@ class SwerveController(Node):
             vy = msg.linear.y     # m/s
             omega = msg.angular.z # rad/s
 
+            now = time.time()
+            dt = now - self.pid_last_time
+            self.pid_last_time = now
+
+            omega = self.compensate_omega(omega, self.imu_omega, dt)
+
             wheel_states = self.compute_swerve(vx, vy, omega)
             
             self.send_serial(wheel_states)
+
+    def imu_callback(self, msg):
+        self.imu_omega = msg.angular_velocity.z
+
+    def compensate_omega(self, desired_omega, actual_omega, dt):
+        error = desired_omega - actual_omega
+
+        if abs(error) < 0.05:
+            self.prev_error = error
+            return desired_omega
+        
+        self.i += error * dt
+        self.i = max(min(1, self.i), -1)
+        d = (error - self.prev_error) / dt if dt > 0 else 0
+
+        compensate = error * self.Kp + self.i * self.Ki + d * self.Kd
+
+        self.prev_error = error
+
+        return desired_omega + compensate
 
 
     def read_feedback(self):
@@ -131,7 +182,7 @@ class SwerveController(Node):
                 data = self.ser.read(self.ser.in_waiting)
                 self.serial_buffer_bytes += data
         except Exception as e:
-            print("Serial read error:", e)
+            # print("Serial read error:", e)
             return self.mode
 
         i = 0
@@ -139,9 +190,7 @@ class SwerveController(Node):
 
         while i < len(buffer):
 
-            # ==============================
-            # 🔵 MODE PACKET (0xAA mode checksum)
-            # ==============================
+            # MODE PACKET (0xAA mode checksum)
             if buffer[i] == 0xAA:
 
                 # Ensure full packet exists
@@ -159,9 +208,7 @@ class SwerveController(Node):
                     print("Checksum failed")
                     i += 1
 
-            # ==============================
-            # 🟢 ASCII ODOM PACKET (@ ... \n)
-            # ==============================
+            # ASCII ODOM PACKET
             elif buffer[i] == ord('@'):
 
                 newline_index = buffer.find(b'\n', i)
@@ -197,7 +244,7 @@ class SwerveController(Node):
                         # 'bl': (data['B3'], data['S3']),
                         # 'br': (data['B4'], data['S4'])
                     }
-                    print(self.wheel_odom)
+                    # print(self.wheel_odom)
 
                     self.odom_recv = True
 
@@ -297,52 +344,79 @@ class SwerveController(Node):
         return (rpm * 2.0 * math.pi / 60.0) * self.wheel_radius
     
     def compute_odom(self, dt):
+        # Wheel speeds (m/s)
         v1 = self.rpm_to_speed(self.wheel_odom['fl'][0])
         v2 = self.rpm_to_speed(self.wheel_odom['fr'][0])
         v3 = self.rpm_to_speed(self.wheel_odom['bl'][0])
         v4 = self.rpm_to_speed(self.wheel_odom['br'][0])
+
+        # Wheel angles
         s1 = self.wheel_odom['fl'][1]
         s2 = self.wheel_odom['fr'][1]
         s3 = self.wheel_odom['bl'][1]
         s4 = self.wheel_odom['br'][1]
-        
-        r1 = np.array([self.L / 2, self.W / 2])
-        r2 = np.array([self.L / 2, -1 * self.W / 2])
-        r3 = np.array([-1 * self.L / 2, self.W / 2])
-        r4 = np.array([-1 * self.L / 2, -1 * self.W / 2])
 
+        # Wheel positions
+        r1 = np.array([ self.L / 2,  self.W / 2])
+        r2 = np.array([ self.L / 2, -self.W / 2])
+        r3 = np.array([-self.L / 2,  self.W / 2])
+        r4 = np.array([-self.L / 2, -self.W / 2])
+
+        # Convert to velocity vectors
         vx1 = v1 * math.cos(s1 * math.pi / 180)
-        vx2 = v2 * math.cos(s2 * math.pi / 180)
-        vx3 = v3 * math.cos(s3 * math.pi / 180)
-        vx4 = v4 * math.cos(s4 * math.pi / 180)
+        vy1 = -v1 * math.sin(s1 * math.pi / 180)
 
-        vy1 = -1 * v1 * math.sin(s1 * math.pi / 180)
-        vy2 = -1 * v2 * math.sin(s2 * math.pi / 180)
-        vy3 = -1 * v3 * math.sin(s3 * math.pi / 180)
-        vy4 = -1 * v4 * math.sin(s4 * math.pi / 180)
+        vx2 = v2 * math.cos(s2 * math.pi / 180)
+        vy2 = -v2 * math.sin(s2 * math.pi / 180)
+
+        vx3 = v3 * math.cos(s3 * math.pi / 180)
+        vy3 = -v3 * math.sin(s3 * math.pi / 180)
+
+        vx4 = v4 * math.cos(s4 * math.pi / 180)
+        vy4 = -v4 * math.sin(s4 * math.pi / 180)
 
         v1_vec = np.array([vx1, vy1])
         v2_vec = np.array([vx2, vy2])
         v3_vec = np.array([vx3, vy3])
         v4_vec = np.array([vx4, vy4])
 
-        omega = (np.cross(r1, v1_vec) + np.cross(r2, v2_vec) + np.cross(r3, v3_vec) + np.cross(r4, v4_vec)) / (4 * ((self.L / 2)**2 + (self.W / 2)**2))
+        A = []
+        b = []
 
-        vx = (vx1 + vx2 + vx3 + vx4) / 4
-        vy = (vy1 + vy2 + vy3 + vy4) / 4
+        r_list = [r1, r2, r3, r4]
+        v_list = [v1_vec, v2_vec, v3_vec, v4_vec]
+
+        for i in range(4):
+            rx, ry = r_list[i]
+            vx_i, vy_i = v_list[i]
+
+            # vx_i = vx - omega * ry
+            A.append([1, 0, -ry])
+            b.append(vx_i)
+
+            # vy_i = vy + omega * rx
+            A.append([0, 1, rx])
+            b.append(vy_i)
+
+        A = np.array(A)
+        b = np.array(b)
+
+        solution, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+        vx, vy, omega = solution
 
         theta_mid = self.theta + omega * dt / 2
 
         vx_w = vx * np.cos(theta_mid) - vy * np.sin(theta_mid)
         vy_w = vx * np.sin(theta_mid) + vy * np.cos(theta_mid)
 
+        vx_w = 0.5
+        vy_w = 0.0
+
         self.x += vx_w * dt
         self.y += vy_w * dt
 
-        self.theta += omega * dt
-        self.theta = self.wrap_angle(self.theta * 180 / math.pi) * math.pi / 180
+        self.theta = (self.theta + omega * dt + np.pi) % (2*np.pi) - np.pi
 
-        # Quaternion
         qx = 0.0
         qy = 0.0
         qz = np.sin(self.theta / 2)
@@ -356,7 +430,7 @@ class SwerveController(Node):
 
         if self.last_odom_time is None:
             self.last_odom_time = now_time
-            return  # skip first iteration
+            return
 
         dt = (now_time - self.last_odom_time).nanoseconds * 1e-9
         dt = min(dt, 0.1)
@@ -390,19 +464,17 @@ class SwerveController(Node):
         odom.twist.twist.angular.z = omega
 
         # Covariances
-        for i in range(36):
-            odom.pose.covariance[i] = 1e3
-            odom.twist.covariance[i] = 1e3
-
         # Pose covariance
-        odom.pose.covariance[0]  = 0.01   # x
-        odom.pose.covariance[7]  = 0.01   # y
-        odom.pose.covariance[35] = 0.02   # yaw
+        odom.pose.covariance = [0.0]*36
+        odom.pose.covariance[0]  = 0.02   # x
+        odom.pose.covariance[7]  = 0.02   # y
+        odom.pose.covariance[35] = 0.05   # yaw
 
         # Twist covariance
-        odom.twist.covariance[0]  = 0.03  # vx
-        odom.twist.covariance[7]  = 0.03  # vy
-        odom.twist.covariance[35] = 0.08  # wz
+        odom.twist.covariance = [0.0]*36
+        odom.twist.covariance[0]  = 0.05  # vx
+        odom.twist.covariance[7]  = 0.05  # vy
+        odom.twist.covariance[35] = 0.1   # wz
 
         self.odom_pub.publish(odom)
 

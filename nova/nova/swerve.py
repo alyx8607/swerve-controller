@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu
+from std_msgs.msg import Int32
 from nav_msgs.msg import Odometry
 import numpy as np
 import math
@@ -44,7 +45,8 @@ class SwerveController(Node):
             'br': (0.0, 0.0)
         }
 
-        self.mode = 3
+        self.mode_feedback = 3
+        self.mode = 0
         self.theta = 0
         self.last_odom_time = None
         self.x = 0.0
@@ -59,16 +61,16 @@ class SwerveController(Node):
                 timeout=0
             )
             time.sleep(0.5)
-            self.mode = self.read_feedback()
+            self.mode_feedback = self.read_feedback()
         except:
             print("Failed to open serial port")
 
-        self.sub_1 = self.create_subscription(
-            Twist,
-            'cmd_vel_1',
-            self.cmd_vel_callback_1,
-            10
-        )
+        # self.sub_1 = self.create_subscription(
+        #     Twist,
+        #     'cmd_vel_1',
+        #     self.cmd_vel_callback_1,
+        #     10
+        # )
 
         self.sub = self.create_subscription(
             Twist,
@@ -77,16 +79,24 @@ class SwerveController(Node):
             10
         )
 
+        self.sub_mode = self.create_subscription(
+            Int32,
+            'alyx/mode',
+            self.mode_feedback_callback,
+            10
+        )
+
         self.odom_pub = self.create_publisher(Odometry, '/alyx/wheel/odom', 10)
 
         self.create_timer(0.02, self.update_serial)
+        self.create_timer(2, self.mode_serial_callback)
 
-        self.sub_imu = self.create_subscription(
-            Imu,
-            'imu/data',
-            self.imu_callback,
-            10
-        )
+        # self.sub_imu = self.create_subscription(
+        #     Imu,
+        #     'imu/data',
+        #     self.imu_callback,
+        #     10
+        # )
 
         self.imu_omega = 0
 
@@ -100,36 +110,49 @@ class SwerveController(Node):
         self.pid_last_time = time.time()
 
     def update_serial(self):
-        self.mode = self.read_feedback()
+        self.mode_feedback = self.read_feedback()
 
         # if self.odom_recv:
         self.publish_odom()
 
-    def cmd_vel_callback_1(self, msg):
-        if self.mode == 2:
-            now = time.time()
+    def mode_feedback_callback(self, msg):
+        self.mode = int(msg.data)
+        print(self.mode)
 
-            if now - self.last_serial_time < self.serial_period:
-                return
+    def mode_serial_callback(self):
+        mode_msg = f"M {self.mode};\n"
+        try:
+            self.ser.write(mode_msg.encode())
+        except:
+            print("Error writing to serial")
+
+
+    # def cmd_vel_callback_1(self, msg):
+    #     if self.mode_feedback == 2:
+    #         now = time.time()
+
+    #         if now - self.last_serial_time < self.serial_period:
+    #             return
             
-            self.last_serial_time = now
+    #         self.last_serial_time = now
             
-            vx = msg.linear.x     # m/s
-            vy = msg.linear.y     # m/s
-            omega = msg.angular.z # rad/s
+    #         vx = msg.linear.x     # m/s
+    #         vy = msg.linear.y     # m/s
+    #         omega = msg.angular.z # rad/s
 
-            now = time.time()
-            dt = now - self.pid_last_time
-            self.pid_last_time = now
+    #         now = time.time()
+    #         dt = now - self.pid_last_time
+    #         self.pid_last_time = now
 
-            omega = self.compensate_omega(omega, self.imu_omega, dt)
+    #         omega = self.compensate_omega(omega, self.imu_omega, dt)
 
-            wheel_states = self.compute_swerve(vx, vy, omega)
+    #         wheel_states = self.compute_swerve(vx, vy, omega)
             
-            self.send_serial(wheel_states)
+    #         self.send_serial(wheel_states)
 
     def cmd_vel_callback(self, msg):
-        if self.mode == 3 or self.mode == 4:
+        # if self.mode_feedback == 3 or self.mode_feedback == 4:
+        if True:
             now = time.time()
 
             if now - self.last_serial_time < self.serial_period:
@@ -142,17 +165,18 @@ class SwerveController(Node):
             omega = msg.angular.z # rad/s
 
             now = time.time()
-            dt = now - self.pid_last_time
+            # dt = now - self.pid_last_time
             self.pid_last_time = now
 
-            omega = self.compensate_omega(omega, self.imu_omega, dt)
+            # omega = self.compensate_omega(omega, self.imu_omega, dt)
 
             wheel_states = self.compute_swerve(vx, vy, omega)
             
             self.send_serial(wheel_states)
 
-    def imu_callback(self, msg):
-        self.imu_omega = msg.angular_velocity.z
+
+    # def imu_callback(self, msg):
+    #     self.imu_omega = msg.angular_velocity.z
 
     def compensate_omega(self, desired_omega, actual_omega, dt):
         error = desired_omega - actual_omega
@@ -182,16 +206,14 @@ class SwerveController(Node):
                 self.serial_buffer_bytes += data
         except Exception as e:
             # print("Serial read error:", e)
-            return self.mode
+            return self.mode_feedback
 
         i = 0
         buffer = self.serial_buffer_bytes
 
         while i < len(buffer):
 
-            # ==============================
-            # 🔵 MODE PACKET (0xAA mode checksum)
-            # ==============================
+            # MODE PACKET (0xAA mode checksum)
             if buffer[i] == 0xAA:
 
                 # Ensure full packet exists
@@ -202,16 +224,14 @@ class SwerveController(Node):
                 checksum = buffer[i + 2]
 
                 if checksum == (0xAA ^ mode):
-                    self.mode = int(mode)
+                    self.mode_feedback = int(mode)
                     # print(f"Mode: {mode}")
                     i += 3
                 else:
                     print("Checksum failed")
                     i += 1
 
-            # ==============================
-            # 🟢 ASCII ODOM PACKET (@ ... \n)
-            # ==============================
+            # ASCII ODOM PACKET
             elif buffer[i] == ord('@'):
 
                 newline_index = buffer.find(b'\n', i)
@@ -261,7 +281,7 @@ class SwerveController(Node):
         # Keep only unprocessed data
         self.serial_buffer_bytes = buffer[i:]
 
-        return self.mode
+        return self.mode_feedback
 
 
     def compute_swerve(self, vx, vy, omega):

@@ -6,3 +6,5 @@ log/
 rosbag*
 mavros/
 nova/meshes/
+*.stl
+nova/meshes/
