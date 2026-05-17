@@ -4,6 +4,7 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Int32
 from nav_msgs.msg import Odometry
+from wheel_msgs.msg import SwerveState
 import numpy as np
 import math
 import serial
@@ -43,6 +44,13 @@ class SwerveController(Node):
             'fr': (0.0, 0.0),
             'bl': (0.0, 0.0),
             'br': (0.0, 0.0)
+        }
+
+        self.wheel_states = {
+            'fl': {'rpm': 0.0, 'angle': 0.0},
+            'fr': {'rpm': 0.0, 'angle': 0.0},
+            'bl': {'rpm': 0.0, 'angle': 0.0},
+            'br': {'rpm': 0.0, 'angle': 0.0}
         }
 
         self.mode_feedback = 3
@@ -86,7 +94,18 @@ class SwerveController(Node):
             10
         )
 
-        self.odom_pub = self.create_publisher(Odometry, '/alyx/wheel/odom', 10)
+        self.odom_pub = self.create_publisher(
+            Odometry,
+            '/alyx/wheel_odom',
+            10)
+
+        self.swerve_pub = self.create_publisher(
+            SwerveState,
+            '/alyx/wheel_states',
+            10
+        )
+
+        self.create_timer(0.02, self.publish_states)
 
         self.create_timer(0.02, self.update_serial)
         self.create_timer(2, self.mode_serial_callback)
@@ -147,6 +166,7 @@ class SwerveController(Node):
     #         omega = self.compensate_omega(omega, self.imu_omega, dt)
 
     #         wheel_states = self.compute_swerve(vx, vy, omega)
+    #         self.wheel_states = wheel_states
             
     #         self.send_serial(wheel_states)
 
@@ -171,7 +191,8 @@ class SwerveController(Node):
             # omega = self.compensate_omega(omega, self.imu_omega, dt)
 
             wheel_states = self.compute_swerve(vx, vy, omega)
-            
+            self.wheel_states = wheel_states
+
             self.send_serial(wheel_states)
 
 
@@ -432,9 +453,6 @@ class SwerveController(Node):
         vx_w = vx * np.cos(theta_mid) - vy * np.sin(theta_mid)
         vy_w = vx * np.sin(theta_mid) + vy * np.cos(theta_mid)
 
-        vx_w = 0.5
-        vy_w = 0.0
-
         self.x += vx_w * dt
         self.y += vy_w * dt
 
@@ -500,6 +518,33 @@ class SwerveController(Node):
         odom.twist.covariance[35] = 0.1   # wz
 
         self.odom_pub.publish(odom)
+
+    def publish_states(self):
+        msg = SwerveState()
+
+        # actual
+        msg.actual.fl_rpm = float(self.wheel_odom['fl'][0])
+        msg.actual.fr_rpm = float(self.wheel_odom['fr'][0])
+        msg.actual.bl_rpm = float(self.wheel_odom['bl'][0])
+        msg.actual.br_rpm = float(self.wheel_odom['br'][0])
+
+        msg.actual.fl_angle = float(self.wheel_odom['fl'][1])
+        msg.actual.fr_angle = float(self.wheel_odom['fr'][1])
+        msg.actual.bl_angle = float(self.wheel_odom['bl'][1])
+        msg.actual.br_angle = float(self.wheel_odom['br'][1])
+
+        # target
+        msg.target.fl_rpm = float(self.wheel_states['fl']['rpm'])
+        msg.target.fr_rpm = float(self.wheel_states['fr']['rpm'])
+        msg.target.bl_rpm = float(self.wheel_states['bl']['rpm'])
+        msg.target.br_rpm = float(self.wheel_states['br']['rpm'])
+
+        msg.target.fl_angle = float(self.wheel_states['fl']['angle'])
+        msg.target.fr_angle = float(self.wheel_states['fr']['angle'])
+        msg.target.bl_angle = float(self.wheel_states['bl']['angle'])
+        msg.target.br_angle = float(self.wheel_states['br']['angle'])
+
+        self.swerve_pub.publish(msg)
 
 
     def send_serial(self, states):
