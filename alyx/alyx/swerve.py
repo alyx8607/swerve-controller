@@ -53,8 +53,8 @@ class SwerveController(Node):
             'br': {'rpm': 0.0, 'angle': 0.0}
         }
 
-        self.mode_feedback = 3
-        self.mode = 0
+        self.mode_feedback = 5
+        self.mode = 5
         self.theta = 0
         self.last_odom_time = None
         self.x = 0.0
@@ -75,22 +75,28 @@ class SwerveController(Node):
 
         # self.sub_1 = self.create_subscription(
         #     Twist,
-        #     'cmd_vel_1',
+        #     '/cmd_vel_1',
         #     self.cmd_vel_callback_1,
         #     10
         # )
 
-        self.sub = self.create_subscription(
+        self.cmd_vel_sub = self.create_subscription(
             Twist,
-            'cmd_vel',
+            '/cmd_vel',
             self.cmd_vel_callback,
             10
         )
 
-        self.sub_mode = self.create_subscription(
+        self.mode_sub = self.create_subscription(
             Int32,
-            'alyx/mode',
-            self.mode_feedback_callback,
+            '/alyx/mode',
+            self.mode_change_callback,
+            10
+        )
+
+        self.mode_feedback_pub = self.create_publisher(
+            Int32,
+            '/alyx/mode_feedback',
             10
         )
 
@@ -112,7 +118,7 @@ class SwerveController(Node):
 
         # self.sub_imu = self.create_subscription(
         #     Imu,
-        #     'imu/data',
+        #     '/imu/data',
         #     self.imu_callback,
         #     10
         # )
@@ -131,19 +137,26 @@ class SwerveController(Node):
     def update_serial(self):
         self.mode_feedback = self.read_feedback()
 
+        if self.mode_feedback is not None:
+            mode_msg = Int32()
+            mode_msg.data = int(self.mode_feedback)
+            self.mode_feedback_pub.publish(mode_msg)
+
         # if self.odom_recv:
         self.publish_odom()
 
-    def mode_feedback_callback(self, msg):
+    def mode_change_callback(self, msg):
         self.mode = int(msg.data)
-        print(self.mode)
+        print(f"Got: {self.mode}")
 
     def mode_serial_callback(self):
-        mode_msg = f"M {self.mode};\n"
-        try:
-            self.ser.write(mode_msg.encode())
-        except:
-            print("Error writing to serial")
+        mode_msg = self.mode
+        if self.mode != self.mode_feedback:
+            print(f'M {mode_msg};\n')
+            try:
+                self.ser.write(f'M {mode_msg};\n'.encode())
+            except:
+                print("Error writing to serial")
 
 
     # def cmd_vel_callback_1(self, msg):
@@ -246,7 +259,7 @@ class SwerveController(Node):
 
                 if checksum == (0xAA ^ mode):
                     self.mode_feedback = int(mode)
-                    # print(f"Mode: {mode}")
+                    print(f"Mode: {self.mode_feedback}")
                     i += 3
                 else:
                     print("Checksum failed")
