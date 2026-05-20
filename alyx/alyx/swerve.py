@@ -114,7 +114,7 @@ class SwerveController(Node):
         self.create_timer(0.02, self.publish_states)
 
         self.create_timer(0.02, self.update_serial)
-        self.create_timer(2, self.mode_serial_callback)
+        self.create_timer(1, self.mode_serial_callback)
 
         # self.sub_imu = self.create_subscription(
         #     Imu,
@@ -259,7 +259,7 @@ class SwerveController(Node):
 
                 if checksum == (0xAA ^ mode):
                     self.mode_feedback = int(mode)
-                    print(f"Mode: {self.mode_feedback}")
+                    # print(f"Mode: {self.mode_feedback}")
                     i += 3
                 else:
                     print("Checksum failed")
