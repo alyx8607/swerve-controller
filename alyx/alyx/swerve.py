@@ -26,6 +26,8 @@ class SwerveController(Node):
         self.last_serial_time = 0.0
         self.serial_period = 0.025  # seconds
 
+        self.reconnecting = False
+
         self.current_angles = {
             'fl': 0.0,
             'fr': 0.0,
@@ -65,7 +67,7 @@ class SwerveController(Node):
 
         try:
             self.ser = serial.Serial(
-                port='/dev/ttyUSB0',
+                port='/dev/ttyALYX',
                 baudrate=115200,
                 timeout=0
             )
@@ -176,6 +178,7 @@ class SwerveController(Node):
                 self.ser.write(f'M {mode_msg};\n'.encode())
             except:
                 print("Error writing to serial")
+                self.reconnect()
 
 
     # def cmd_vel_callback_1(self, msg):
@@ -259,6 +262,7 @@ class SwerveController(Node):
                 self.serial_buffer_bytes += data
         except Exception as e:
             print("Serial read error:", e)
+            self.reconnect()
             return self.mode_feedback
 
         i = 0
@@ -591,7 +595,30 @@ class SwerveController(Node):
             self.ser.write(msg.encode())
         except:
             print("Error writing to serial")
+            self.reconnect()
 
+    def reconnect(self):
+        if self.reconnecting:
+            return
+
+        self.reconnecting = True
+        
+        try:
+            self.ser.close()
+        except:
+            pass
+
+        try:
+            self.ser = serial.Serial(
+                port="/dev/ttyALYX",
+                baudrate=115200,
+                timeout=0
+            )
+            print("Reconnected")
+            self.reconnecting = False
+        except Exception as e:
+            print(f"Failed to reconnect: {e}")
+            self.reconnecting = False
 
 def main():
     rclpy.init()
