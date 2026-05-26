@@ -5,6 +5,7 @@ from sensor_msgs.msg import Imu
 from std_msgs.msg import Int32
 from nav_msgs.msg import Odometry
 from wheel_msgs.msg import SwerveState
+from mode_srv.srv import ChangeMode
 import numpy as np
 import math
 import serial
@@ -87,11 +88,17 @@ class SwerveController(Node):
             10
         )
 
-        self.mode_sub = self.create_subscription(
-            Int32,
-            '/alyx/mode',
-            self.mode_change_callback,
-            10
+        # self.mode_sub = self.create_subscription(
+        #     Int32,
+        #     '/alyx/mode',
+        #     self.mode_change_callback,
+        #     10
+        # )
+
+        self.mode_srv = self.create_service(
+            ChangeMode,
+            '/alyx/change_mode',
+            self.mode_change_callback
         )
 
         self.mode_feedback_pub = self.create_publisher(
@@ -114,7 +121,7 @@ class SwerveController(Node):
         self.create_timer(0.02, self.publish_states)
 
         self.create_timer(0.02, self.update_serial)
-        self.create_timer(1, self.mode_serial_callback)
+        self.create_timer(0.1, self.mode_serial_callback)
 
         # self.sub_imu = self.create_subscription(
         #     Imu,
@@ -145,9 +152,21 @@ class SwerveController(Node):
         # if self.odom_recv:
         self.publish_odom()
 
-    def mode_change_callback(self, msg):
-        self.mode = int(msg.data)
-        print(f"Got: {self.mode}")
+    # def mode_change_callback(self, msg):
+    #     self.mode = int(msg.data)
+    #     print(f"Got: {self.mode}")
+
+    def mode_change_callback(self, request, response):
+        requested_mode = int(request.mode)
+        print(f"Got: {requested_mode}")
+
+        if requested_mode in [0, 1, 2, 3, 4, 5]:
+            self.mode = requested_mode
+            response.success = True
+        else:
+            response.success = False
+
+        return response
 
     def mode_serial_callback(self):
         mode_msg = self.mode
@@ -239,7 +258,7 @@ class SwerveController(Node):
                 data = self.ser.read(self.ser.in_waiting)
                 self.serial_buffer_bytes += data
         except Exception as e:
-            # print("Serial read error:", e)
+            print("Serial read error:", e)
             return self.mode_feedback
 
         i = 0
