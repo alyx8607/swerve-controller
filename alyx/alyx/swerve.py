@@ -56,8 +56,8 @@ class SwerveController(Node):
             'br': {'rpm': 0.0, 'angle': 0.0}
         }
 
-        self.mode_feedback = 5
-        self.mode = 5
+        self.mode_feedback = 2
+        self.mode = 2
         self.theta = 0
         self.last_odom_time = None
         self.x = 0.0
